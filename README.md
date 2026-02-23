@@ -34,7 +34,7 @@ It lets you manage students, programs, and colleges with basic validation and sa
 
 ---
 
-## 📊 Entity Structure
+## 📊 Program Structure
 
 ### Students
 - **ID**: YYYY-NNNN format (e.g., 2024-0001)
