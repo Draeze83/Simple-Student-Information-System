@@ -6,6 +6,11 @@ It lets you manage students, programs, and colleges with basic validation and sa
 
 ---
 
+## 🏃 Running the app
+- To run the program, just run `run.bat`
+
+---
+
 ## 🎯 Features
 
 ### Core Functionality
