@@ -1,0 +1,11 @@
+# Ignore compiled Java classes
+*.class
+
+# Ignore any file with a $ in its name
+*$*
+
+# (optional) ignore common build folders
+/bin/
+/build/
+/out/
+/target/
