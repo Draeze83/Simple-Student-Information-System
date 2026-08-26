@@ -1,86 +1,159 @@
 ## Simple Student Information System
 
-This is a desktop Student Information System written in Java Swing that stores all data in plain CSV files.
+A desktop Student Information System written in Java Swing that stores all data in plain CSV files — no database engine, no external dependencies.
 
-It lets you manage students, programs, and colleges with basic validation and safety checks.
+It manages **Students**, **Programs**, and **Colleges** with validation, cascading updates, and crash-safe saves.
+
+---
+
+## 📦 Requirements
+
+- **JDK 8 or newer** (developed against JDK 26). `javac` and `java` must be on your `PATH`.
+- Windows for `run.bat`; any OS works using the manual commands below.
 
 ---
 
 ## 🏃 Running the app
-- To run the program, just run `run.bat`
+
+**Windows** — just run `run.bat`. It compiles the sources and launches the app.
+
+**Any platform** — compile and run manually:
+
+```
+javac Main/StudentInformationSystem.java Main/Managers/*.java Main/Models/*.java Main/Panels/*.java
+java -cp . Main.StudentInformationSystem
+```
+
+Run these from the project root — the app resolves its data files relative to the working directory, and refuses paths outside it.
+
+---
+
+## 🗄️ Data & storage
+
+**This repository ships with no data.** The app starts with empty Students, Programs, and Colleges tables, and you populate it yourself.
+
+Three CSV files are created under `Main/Data/` the first time you add a record:
+
+| File | Columns |
+|---|---|
+| `Student.csv` | `id,first_name,last_name,program_code,year,gender` |
+| `Program.csv` | `code,name,college` |
+| `College.csv` | `code,name` |
+
+Notes on the format:
+
+- An unassigned program or college is stored as the literal token `NULL`.
+- Values containing `,`, `"`, or newlines are quoted; embedded quotes are doubled.
+- Values starting with `=` or `+` get a leading apostrophe as a spreadsheet-injection guard.
+- Missing data files are not an error — they are simply treated as empty.
+
+### Backup files
+
+Every save writes a `.backup` copy plus a **timestamped `.bak` snapshot** next to the CSV. These accumulate quickly (hundreds of files over normal use). They are runtime artifacts, and `.gitignore` excludes them along with `Main/Data/*.csv`, so your local data and its backup history never get committed.
+
+To reset to a clean slate, delete the contents of `Main/Data/` (keep `.gitkeep`).
 
 ---
 
 ## 🎯 Features
 
-### Core Functionality
-- ✅ **CRUD Operations** - Create, Read, Update, Delete for Students, Programs, and Colleges
-- ✅ **Real-time Search** - Instant search across all fields in each entity
-- ✅ **Column Sorting** - Click headers to sort data (ascending/descending)
-- ✅ **CSV Import/Export** - Load from and export data to CSV files
-- ✅ **Data Validation** - Comprehensive input validation and sanitization
-- ✅ **Referential Integrity** - Prevents deletion of referenced entities
-- ✅ **Error Handling** - Clear error messages and failure recovery
+### Core functionality
+- ✅ **Full CRUD** — add, update, and delete Students, Programs, and Colleges
+- ✅ **Real-time search** — filters as you type, across every field in the tab
+- ✅ **Column sorting** — click a header to sort, click again to reverse
+- ✅ **Pagination** — page size of 10 / 15 / 20 / 30 / 50, with Prev, Next, and jump-to-page
+- ✅ **Cascading updates** — renaming a program or college code follows through to every record that references it
+- ✅ **Delete warnings** — confirmation dialogs spell out exactly what a delete will affect
+- ✅ **Malformed-row warnings** — unreadable CSV rows are reported at startup instead of being silently dropped
+- ✅ **Duplicate detection** — duplicate codes and IDs are removed on load and rejected on entry
 
-### 🔒 Security Features
-- ✅ **CSV Injection Prevention** - Automatic escaping of special characters
-- ✅ **Path Traversal Protection** - Validates all file paths
-- ✅ **Atomic Save Operations** - Backup before overwrite with rollback
-- ✅ **Input Length Limits** - Prevents memory exhaustion attacks
-- ✅ **Format Validation** - Regex validation for all inputs
-- ✅ **Error Propagation** - Users notified of all failures
-- ✅ **Code Sanitization** - Alphanumeric-only codes prevent injection
-- ✅ **Safe Character Sets** - Names restricted to letters, spaces, hyphens
+### Safety and validation
+- ✅ **Atomic saves** — data is written to a temp file and then moved into place, so an interrupted save can never leave a half-written CSV
+- ✅ **Rollback on failure** — if a multi-file save fails partway, in-memory state is restored and the files are re-synced
+- ✅ **CSV injection prevention** — special characters and formula prefixes are escaped on write
+- ✅ **Path traversal protection** — data paths must stay inside the working directory and end in `.csv`
+- ✅ **Input length limits** — enforced by the text fields themselves, not just on submit
+- ✅ **Search sanitization** — `< > " ' ; \` stripped, queries capped at 100 characters
+- ✅ **Field-level errors** — validation failures name the specific field that is wrong
 
 ---
 
-## 📊 Program Structure
+## 🧾 Validation rules
 
 ### Students
-- **ID**: YYYY-NNNN format (e.g., 2024-0001)
-- **Names**: 1-50 characters, letters/spaces/hyphens only
-- **Year**: 1-6 only
-- **Gender**: M, F, or Other
-- **Program**: Must reference existing program
+| Field | Rule |
+|---|---|
+| ID | Exactly `YYYY-NNNN` (regex `\d{4}-\d{4}`), must be unique |
+| First / Last name | 1–50 chars, letters, spaces, hyphens, apostrophes (`^[a-zA-Z\s'\-]+$`) |
+| Year | A single digit `1`–`6` |
+| Gender | `M`, `F`, or `Other` |
+| Program | Must reference an existing program, or be left unassigned |
 
 ### Programs
-- **Code**: 2-20 uppercase alphanumeric (e.g., BSCS)
-- **Name**: 1-100 characters
-- **College**: Must reference existing college
+| Field | Rule |
+|---|---|
+| Code | **Uppercase letters only**, 2–20 (`^[A-Z]{2,20}$`), unique |
+| Name | 1–100 chars, letters, spaces, hyphens, apostrophes, parentheses (`^[a-zA-Z\s'\-()]+$`) |
+| College | Must reference an existing college, or be left unassigned |
 
 ### Colleges
-- **Code**: 2-20 uppercase alphanumeric (e.g., CCS)
-- **Name**: 1-100 characters
+| Field | Rule |
+|---|---|
+| Code | **Uppercase letters only**, 2–20 (`^[A-Z]{2,20}$`), unique |
+| Name | 1–100 chars, letters, spaces, hyphens, apostrophes, parentheses (`^[a-zA-Z\s'\-()]+$`) |
+
+> ⚠️ Codes reject digits. `BSCS` is valid; `BSIT2` and `bscs` are not — codes are not auto-uppercased, so type them in caps.
 
 ---
 
-### 🤨 Validation Rules:
-- ✅ Student ID: Must match `\d{4}-\d{4}`
-- ✅ Names: `[a-zA-Z\s'-]+` pattern
-- ✅ Codes: `[A-Z0-9]{2,20}` pattern
-- ✅ Year: Integer 1-6 only
-- ✅ Gender: M, F, or Other only
+## 🔗 How references behave
+
+Deleting a record does **not** block on its dependents — it un-links them:
+
+| Action | Effect |
+|---|---|
+| Delete a program | Enrolled students have their program set to `NULL` |
+| Delete a college | Its programs have their college set to `NULL`, **and** students in those programs have their program set to `NULL` |
+| Rename a program code | Enrolled students are updated to the new code |
+| Rename a college code | Its programs are updated to the new code |
+
+Each delete asks for confirmation first and states the consequence.
 
 ---
 
-## 🎮 User Guide
+## 🎮 User guide
 
-### Adding Records
-1. Fill form fields
-2. Click **Add**
-3. System validates and saves
-4. Backup created automatically
+**Adding** — fill the form fields, click **Add**. The record is validated and saved immediately.
 
-### Searching
-- Type in search box
-- Filters in real-time
-- Searches all fields
+**Updating** — select a row, edit the fields, click **Update**.
 
-### Sorting
-- Click column header
-- Click again to reverse
+**Deleting** — select a row, click **Delete**, confirm the warning.
 
-### Exporting
-- Click **Export CSV**
-- Choose location
-- Data saved with proper escaping
+**Clear / Refresh** — **Clear** empties the form; **Refresh** reloads the table from memory.
+
+**Searching** — type in the search box; results filter live. Search `null` to find records with no program assigned.
+
+**Menu** — *File ▸ Import from CSV* reloads all data from disk, discarding unsaved changes. *File ▸ Export All to CSV* is informational only: it confirms that data is already written to the CSV files on every change. There is no separate export step or file chooser.
+
+---
+
+## 📁 Project structure
+
+```
+Main/
+├── StudentInformationSystem.java   # JFrame, tabs, menu bar
+├── Data/                           # CSV storage (created at runtime)
+├── Managers/
+│   ├── CSVManager.java             # Load/save, atomic writes, backups, path validation
+│   └── DataManager.java            # In-memory state, validation, cascades, search
+├── Models/
+│   ├── Student.java                # + CSV escape/unescape
+│   ├── Program.java
+│   └── College.java
+└── Panels/
+    ├── StudentPanel.java           # Table, form, search, pagination
+    ├── ProgramPanel.java
+    └── CollegePanel.java
+```
+
+Compiled `.class` files are gitignored.
