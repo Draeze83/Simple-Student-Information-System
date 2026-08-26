@@ -6,14 +6,14 @@ It manages **Students**, **Programs**, and **Colleges** with validation, cascadi
 
 ---
 
-## 📦 Requirements
+## Requirements
 
 - **JDK 8 or newer** (developed against JDK 26). `javac` and `java` must be on your `PATH`.
 - Windows for `run.bat`; any OS works using the manual commands below.
 
 ---
 
-## 🏃 Running the app
+## Running the app
 
 **Windows** — just run `run.bat`. It compiles the sources and launches the app.
 
@@ -28,7 +28,7 @@ Run these from the project root — the app resolves its data files relative to 
 
 ---
 
-## 🗄️ Data & storage
+## Data & storage
 
 **This repository ships with no data.** The app starts with empty Students, Programs, and Colleges tables, and you populate it yourself.
 
@@ -55,30 +55,30 @@ To reset to a clean slate, delete the contents of `Main/Data/` (keep `.gitkeep`)
 
 ---
 
-## 🎯 Features
+## Features
 
 ### Core functionality
-- ✅ **Full CRUD** — add, update, and delete Students, Programs, and Colleges
-- ✅ **Real-time search** — filters as you type, across every field in the tab
-- ✅ **Column sorting** — click a header to sort, click again to reverse
-- ✅ **Pagination** — page size of 10 / 15 / 20 / 30 / 50, with Prev, Next, and jump-to-page
-- ✅ **Cascading updates** — renaming a program or college code follows through to every record that references it
-- ✅ **Delete warnings** — confirmation dialogs spell out exactly what a delete will affect
-- ✅ **Malformed-row warnings** — unreadable CSV rows are reported at startup instead of being silently dropped
-- ✅ **Duplicate detection** — duplicate codes and IDs are removed on load and rejected on entry
+-  **Full CRUD** — add, update, and delete Students, Programs, and Colleges
+-  **Real-time search** — filters as you type, across every field in the tab
+-  **Column sorting** — click a header to sort, click again to reverse
+-  **Pagination** — page size of 10 / 15 / 20 / 30 / 50, with Prev, Next, and jump-to-page
+-  **Cascading updates** — renaming a program or college code follows through to every record that references it
+-  **Delete warnings** — confirmation dialogs spell out exactly what a delete will affect
+-  **Malformed-row warnings** — unreadable CSV rows are reported at startup instead of being silently dropped
+-  **Duplicate detection** — duplicate codes and IDs are removed on load and rejected on entry
 
 ### Safety and validation
-- ✅ **Atomic saves** — data is written to a temp file and then moved into place, so an interrupted save can never leave a half-written CSV
-- ✅ **Rollback on failure** — if a multi-file save fails partway, in-memory state is restored and the files are re-synced
-- ✅ **CSV injection prevention** — special characters and formula prefixes are escaped on write
-- ✅ **Path traversal protection** — data paths must stay inside the working directory and end in `.csv`
-- ✅ **Input length limits** — enforced by the text fields themselves, not just on submit
-- ✅ **Search sanitization** — `< > " ' ; \` stripped, queries capped at 100 characters
-- ✅ **Field-level errors** — validation failures name the specific field that is wrong
+-  **Atomic saves** — data is written to a temp file and then moved into place, so an interrupted save can never leave a half-written CSV
+-  **Rollback on failure** — if a multi-file save fails partway, in-memory state is restored and the files are re-synced
+-  **CSV injection prevention** — special characters and formula prefixes are escaped on write
+-  **Path traversal protection** — data paths must stay inside the working directory and end in `.csv`
+-  **Input length limits** — enforced by the text fields themselves, not just on submit
+-  **Search sanitization** — `< > " ' ; \` stripped, queries capped at 100 characters
+-  **Field-level errors** — validation failures name the specific field that is wrong
 
 ---
 
-## 🧾 Validation rules
+## Validation rules
 
 ### Students
 | Field | Rule |
@@ -102,11 +102,11 @@ To reset to a clean slate, delete the contents of `Main/Data/` (keep `.gitkeep`)
 | Code | **Uppercase letters only**, 2–20 (`^[A-Z]{2,20}$`), unique |
 | Name | 1–100 chars, letters, spaces, hyphens, apostrophes, parentheses (`^[a-zA-Z\s'\-()]+$`) |
 
-> ⚠️ Codes reject digits. `BSCS` is valid; `BSIT2` and `bscs` are not — codes are not auto-uppercased, so type them in caps.
+> Codes reject digits. `BSCS` is valid; `BSIT2` and `bscs` are not — codes are not auto-uppercased, so type them in caps.
 
 ---
 
-## 🔗 How references behave
+## How references behave
 
 Deleting a record does **not** block on its dependents — it un-links them:
 
@@ -121,7 +121,7 @@ Each delete asks for confirmation first and states the consequence.
 
 ---
 
-## 🎮 User guide
+## User guide
 
 **Adding** — fill the form fields, click **Add**. The record is validated and saved immediately.
 
@@ -137,7 +137,7 @@ Each delete asks for confirmation first and states the consequence.
 
 ---
 
-## 📁 Project structure
+## Project structure
 
 ```
 Main/
