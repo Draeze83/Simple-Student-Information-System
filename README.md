@@ -155,5 +155,3 @@ Main/
     ├── ProgramPanel.java
     └── CollegePanel.java
 ```
-
-Compiled `.class` files are gitignored.
