@@ -27,6 +27,7 @@ public class StudentInformationSystem extends JFrame {
                 "Main/Data/College.csv"
             );
             dataManager = new DataManager(csvManager);
+            showLoadWarnings();
         } catch (SecurityException e) {
             JOptionPane.showMessageDialog(null, 
                 "Error initializing CSV files: " + e.getMessage(), 
@@ -110,7 +111,25 @@ public class StudentInformationSystem extends JFrame {
             programPanel.updateCollegeCombo();
             collegePanel.refreshTable();
             JOptionPane.showMessageDialog(this, "Data reloaded successfully");
+            showLoadWarnings();
         }
+    }
+
+    // If the last load skipped any malformed CSV rows, warn the user so the
+    // dropped data isn't silently erased by the next save.
+    private void showLoadWarnings() {
+        java.util.List<String> warnings = dataManager.getLastLoadWarnings();
+        if (warnings.isEmpty()) {
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append(warnings.size()).append(" CSV row(s) could not be read and were skipped.\n");
+        sb.append("These rows will be lost the next time data is saved. Fix them in the CSV files:\n\n");
+        for (String w : warnings) {
+            sb.append("- ").append(w).append("\n");
+        }
+        JOptionPane.showMessageDialog(this, sb.toString().trim(),
+            "Malformed CSV Rows Skipped", JOptionPane.WARNING_MESSAGE);
     }
 
     private void showAbout() {

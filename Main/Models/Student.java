@@ -35,25 +35,51 @@ public class Student {
         return escapeCSV(id) + "," +    
         escapeCSV(firstName) + "," + 
         escapeCSV(lastName) + "," + 
-        escapeCSV(programCode) + "," + 
+        encodeProgramCode(programCode) + "," + 
         escapeCSV(year) + "," + 
         escapeCSV(gender);
     }
 
+    // Encodes a null or blank program code as the literal "NULL" in the CSV
+    private static String encodeProgramCode(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return "NULL";
+        }
+        return escapeCSV(value);
+    }
+
     public static Student fromCSV(String csvLine) {
-        // Split on commas that are not inside double quotes
-        String[] parts = csvLine.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)");
+        // Split on commas that are not inside double quotes; keep trailing empty fields
+        String[] parts = csvLine.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)", -1);
         if (parts.length >= 6) {
+            String programCode = unescapeCSV(parts[3]);
+            // Treat the literal token "NULL" as a null program code
+            if (programCode != null && programCode.equalsIgnoreCase("NULL")) {
+                programCode = null;
+            }
             return new Student(
-                parts[0].trim(), 
-                parts[1].trim(), 
-                parts[2].trim(), 
-                parts[3].trim(), 
-                parts[4].trim(), 
-                parts[5].trim()
+                unescapeCSV(parts[0]),
+                unescapeCSV(parts[1]),
+                unescapeCSV(parts[2]),
+                programCode,
+                unescapeCSV(parts[4]),
+                unescapeCSV(parts[5])
             );
         }
         return null;
+    }
+
+    // Reverses escapeCSV: strips surrounding quotes, collapses doubled quotes,
+    // and removes the leading apostrophe added as an injection guard.
+    private static String unescapeCSV(String value) {
+        if (value == null) return null;
+        String v = value.trim();
+        if (v.length() >= 2 && v.startsWith("\"") && v.endsWith("\"")) {
+            v = v.substring(1, v.length() - 1).replace("\"\"", "\"");
+        } else if (v.startsWith("'=") || v.startsWith("'+")) {
+            v = v.substring(1);
+        }
+        return v;
     }
 
     // This prevents CSV injection

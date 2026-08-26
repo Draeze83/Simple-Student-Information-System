@@ -13,6 +13,12 @@ public class CSVManager {
     private String studentFile;
     private String programFile;
     private String collegeFile;
+    // Warnings recorded by the most recent load call (e.g. skipped malformed rows).
+    private final List<String> lastLoadWarnings = new ArrayList<>();
+
+    public List<String> getLastLoadWarnings() {
+        return new ArrayList<>(lastLoadWarnings);
+    }
 
 public CSVManager(String studentFile, String programFile, String collegeFile) 
         throws SecurityException {
@@ -56,6 +62,7 @@ public CSVManager(String studentFile, String programFile, String collegeFile)
 
     // Student operations
     public List<Student> loadStudents() {
+        lastLoadWarnings.clear();
         List<Student> students = new ArrayList<>();
         File file = new File(studentFile);
         if (!file.exists()) {
@@ -78,7 +85,9 @@ public CSVManager(String studentFile, String programFile, String collegeFile)
                 if (student != null) {
                     students.add(student);
                 } else {
-                    System.err.println("Skipping malformed student CSV row: " + line);
+                    String warning = "Skipping malformed student CSV row: " + line;
+                    System.err.println(warning);
+                    lastLoadWarnings.add(warning);
                 }
             }
         } catch (IOException e) {
@@ -129,6 +138,7 @@ public CSVManager(String studentFile, String programFile, String collegeFile)
 
     // Program operations
     public List<Program> loadPrograms() {
+        lastLoadWarnings.clear();
         List<Program> programs = new ArrayList<>();
         File file = new File(programFile);
         if (!file.exists()) {
@@ -149,7 +159,9 @@ public CSVManager(String studentFile, String programFile, String collegeFile)
                 if (program != null) {
                     programs.add(program);
                 } else {
-                    System.err.println("Skipping malformed program CSV row: " + line);
+                    String warning = "Skipping malformed program CSV row: " + line;
+                    System.err.println(warning);
+                    lastLoadWarnings.add(warning);
                 }
             }
         } catch (IOException e) {
@@ -158,7 +170,7 @@ public CSVManager(String studentFile, String programFile, String collegeFile)
         return programs;
     }
 
-    public void savePrograms(List<Program> programs) {
+    public void savePrograms(List<Program> programs) throws IOException {
         File file = new File(programFile);
         File backupFile = new File(programFile + ".backup");
         File timestampedBackupFile = new File(programFile + "." + System.currentTimeMillis() + ".bak");
@@ -175,29 +187,23 @@ public CSVManager(String studentFile, String programFile, String collegeFile)
             for (Program program : programs) {
                 pw.println(program.toCSV());
             }
-        } catch (IOException e) {
-            System.err.println("Error saving programs (write temp): " + e.getMessage());
-            return;
         }
 
-        try {
-            if (existed) {
-                Files.copy(file.toPath(), backupFile.toPath(),
-                          StandardCopyOption.REPLACE_EXISTING);
-                Files.copy(file.toPath(), timestampedBackupFile.toPath(),
-                          StandardCopyOption.REPLACE_EXISTING);
-            }
-
-            Files.move(tempFile.toPath(), file.toPath(),
-                      StandardCopyOption.REPLACE_EXISTING,
-                      StandardCopyOption.ATOMIC_MOVE);
-        } catch (IOException e) {
-            System.err.println("Error saving programs (backup/move): " + e.getMessage());
+        if (existed) {
+            Files.copy(file.toPath(), backupFile.toPath(),
+                      StandardCopyOption.REPLACE_EXISTING);
+            Files.copy(file.toPath(), timestampedBackupFile.toPath(),
+                      StandardCopyOption.REPLACE_EXISTING);
         }
+
+        Files.move(tempFile.toPath(), file.toPath(),
+                  StandardCopyOption.REPLACE_EXISTING,
+                  StandardCopyOption.ATOMIC_MOVE);
     }
 
     // College operations
     public List<College> loadColleges() {
+        lastLoadWarnings.clear();
         List<College> colleges = new ArrayList<>();
         File file = new File(collegeFile);
         if (!file.exists()) {
@@ -218,7 +224,9 @@ public CSVManager(String studentFile, String programFile, String collegeFile)
                 if (college != null) {
                     colleges.add(college);
                 } else {
-                    System.err.println("Skipping malformed college CSV row: " + line);
+                    String warning = "Skipping malformed college CSV row: " + line;
+                    System.err.println(warning);
+                    lastLoadWarnings.add(warning);
                 }
             }
         } catch (IOException e) {
@@ -227,7 +235,7 @@ public CSVManager(String studentFile, String programFile, String collegeFile)
         return colleges;
     }
 
-    public void saveColleges(List<College> colleges) {
+    public void saveColleges(List<College> colleges) throws IOException {
         File file = new File(collegeFile);
         File backupFile = new File(collegeFile + ".backup");
         File timestampedBackupFile = new File(collegeFile + "." + System.currentTimeMillis() + ".bak");
@@ -244,24 +252,17 @@ public CSVManager(String studentFile, String programFile, String collegeFile)
             for (College college : colleges) {
                 pw.println(college.toCSV());
             }
-        } catch (IOException e) {
-            System.err.println("Error saving colleges (write temp): " + e.getMessage());
-            return;
         }
 
-        try {
-            if (existed) {
-                Files.copy(file.toPath(), backupFile.toPath(),
-                          StandardCopyOption.REPLACE_EXISTING);
-                Files.copy(file.toPath(), timestampedBackupFile.toPath(),
-                          StandardCopyOption.REPLACE_EXISTING);
-            }
-
-            Files.move(tempFile.toPath(), file.toPath(),
-                      StandardCopyOption.REPLACE_EXISTING,
-                      StandardCopyOption.ATOMIC_MOVE);
-        } catch (IOException e) {
-            System.err.println("Error saving colleges (backup/move): " + e.getMessage());
+        if (existed) {
+            Files.copy(file.toPath(), backupFile.toPath(),
+                      StandardCopyOption.REPLACE_EXISTING);
+            Files.copy(file.toPath(), timestampedBackupFile.toPath(),
+                      StandardCopyOption.REPLACE_EXISTING);
         }
+
+        Files.move(tempFile.toPath(), file.toPath(),
+                  StandardCopyOption.REPLACE_EXISTING,
+                  StandardCopyOption.ATOMIC_MOVE);
     }
 }

@@ -19,6 +19,14 @@ public class ProgramPanel extends JPanel {
     private JTextField codeField, nameField;
     private JComboBox<String> collegeCombo;
     private StudentPanel studentPanel;
+    private List<Program> currentResults;
+    private int currentPage = 1;
+    private int pageSize = 15;
+    private JLabel pageInfoLabel;
+    private JTextField pageField;
+    private JButton prevPageButton;
+    private JButton nextPageButton;
+    private JComboBox<Integer> pageSizeCombo;
 
     public ProgramPanel(DataManager dataManager) {
         this.dataManager = dataManager;
@@ -61,7 +69,109 @@ public class ProgramPanel extends JPanel {
 
         JScrollPane scrollPane = new JScrollPane(table);
         scrollPane.setPreferredSize(new Dimension(600, 300));
-        add(scrollPane, BorderLayout.CENTER);
+
+        JPanel tableContainer = new JPanel(new BorderLayout(5, 5));
+        tableContainer.add(scrollPane, BorderLayout.CENTER);
+        tableContainer.add(createNavigationPanel(), BorderLayout.SOUTH);
+
+        add(tableContainer, BorderLayout.CENTER);
+    }
+
+    private JPanel createNavigationPanel() {
+        JPanel navPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 5));
+
+        prevPageButton = new JButton("Prev");
+        prevPageButton.addActionListener(e -> {
+            if (currentPage > 1) {
+                currentPage--;
+                updateTablePage();
+            }
+        });
+
+        nextPageButton = new JButton("Next");
+        nextPageButton.addActionListener(e -> {
+            if (currentPage < getTotalPages()) {
+                currentPage++;
+                updateTablePage();
+            }
+        });
+
+        pageInfoLabel = new JLabel("Page 1 of 1");
+        pageField = new JTextField(3);
+        JButton goPageButton = new JButton("Go");
+        goPageButton.addActionListener(e -> goToPage());
+        pageField.addActionListener(e -> goToPage());
+
+        pageSizeCombo = new JComboBox<>(new Integer[]{10, 15, 20, 30, 50});
+        pageSizeCombo.setSelectedItem(pageSize);
+        pageSizeCombo.addActionListener(e -> {
+            pageSize = (Integer) pageSizeCombo.getSelectedItem();
+            currentPage = 1;
+            updateTablePage();
+        });
+
+        navPanel.add(new JLabel("Page Size:"));
+        navPanel.add(pageSizeCombo);
+        navPanel.add(prevPageButton);
+        navPanel.add(pageInfoLabel);
+        navPanel.add(nextPageButton);
+        navPanel.add(new JLabel("Go to page:"));
+        navPanel.add(pageField);
+        navPanel.add(goPageButton);
+
+        return navPanel;
+    }
+
+    private int getTotalPages() {
+        if (currentResults == null || currentResults.isEmpty()) {
+            return 1;
+        }
+        return Math.max(1, (int) Math.ceil((double) currentResults.size() / pageSize));
+    }
+
+    private void goToPage() {
+        try {
+            int requested = Integer.parseInt(pageField.getText().trim());
+            if (requested < 1 || requested > getTotalPages()) {
+                JOptionPane.showMessageDialog(this, "Page number must be between 1 and " + getTotalPages(), "Invalid Page", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            currentPage = requested;
+            updateTablePage();
+        } catch (NumberFormatException ex) {
+            JOptionPane.showMessageDialog(this, "Enter a valid page number.", "Invalid Page", JOptionPane.WARNING_MESSAGE);
+        }
+    }
+
+    private void setCurrentResults(List<Program> results) {
+        currentResults = results != null ? results : new java.util.ArrayList<>();
+        currentPage = 1;
+        updateTablePage();
+    }
+
+    private void updateTablePage() {
+        tableModel.setRowCount(0);
+        int totalItems = currentResults.size();
+        int totalPages = getTotalPages();
+        if (currentPage > totalPages) {
+            currentPage = totalPages;
+        }
+        int startIndex = Math.max(0, (currentPage - 1) * pageSize);
+        int endIndex = Math.min(startIndex + pageSize, totalItems);
+        for (int i = startIndex; i < endIndex; i++) {
+            Program program = currentResults.get(i);
+            String codeDisplay = program.getCode() != null ? program.getCode() : "NULL";
+            String collegeDisplay = program.getCollege() != null ? program.getCollege() : "NULL";
+            tableModel.addRow(new Object[]{
+                codeDisplay,
+                program.getName(),
+                collegeDisplay
+            });
+        }
+        String rangeText = totalItems == 0 ? "0" : String.valueOf(startIndex + 1);
+        pageInfoLabel.setText(String.format("Page %d of %d (%s-%d of %d)", currentPage, totalPages, rangeText, endIndex, totalItems));
+        prevPageButton.setEnabled(currentPage > 1);
+        nextPageButton.setEnabled(currentPage < totalPages);
     }
 
     private void createSearchPanel() {
@@ -90,7 +200,7 @@ public class ProgramPanel extends JPanel {
         formPanel.add(new JLabel("Code:"), gbc);
         gbc.gridx = 1;
         codeField = new JTextField(15);
-        codeField.setDocument(new LengthRestrictedDocument(10));
+        codeField.setDocument(new LengthRestrictedDocument(20));
         formPanel.add(codeField, gbc);
 
         gbc.gridx = 0; gbc.gridy = 1;
@@ -146,39 +256,28 @@ public class ProgramPanel extends JPanel {
     }
 
     public void refreshTable() {
-        tableModel.setRowCount(0);
-        List<Program> programs = dataManager.getPrograms();
-        for (Program program : programs) {
-            Object[] row = {
-                program.getCode(),
-                program.getName(),
-                program.getCollege()
-            };
-            tableModel.addRow(row);
-        }
+        setCurrentResults(dataManager.getPrograms());
     }
 
     private void performSearch() {
         String query = searchField.getText();
-        tableModel.setRowCount(0);
         List<Program> results = dataManager.searchPrograms(query);
-        for (Program program : results) {
-            Object[] row = {
-                program.getCode(),
-                program.getName(),
-                program.getCollege()
-            };
-            tableModel.addRow(row);
-        }
+        setCurrentResults(results);
     }
 
     private void loadSelectedProgram() {
         int selectedRow = table.getSelectedRow();
         if (selectedRow != -1) {
             int modelRow = table.convertRowIndexToModel(selectedRow);
-            codeField.setText((String) tableModel.getValueAt(modelRow, 0));
+            Object codeValue = tableModel.getValueAt(modelRow, 0);
+            codeField.setText(codeValue != null && !"NULL".equals(codeValue) ? (String) codeValue : "");
             nameField.setText((String) tableModel.getValueAt(modelRow, 1));
-            collegeCombo.setSelectedItem((String) tableModel.getValueAt(modelRow, 2));
+            Object collegeValue = tableModel.getValueAt(modelRow, 2);
+            if (collegeValue == null || "NULL".equals(collegeValue)) {
+                collegeCombo.setSelectedItem(null);
+            } else {
+                collegeCombo.setSelectedItem(collegeValue);
+            }
         }
     }
 
@@ -224,8 +323,8 @@ public class ProgramPanel extends JPanel {
             return;
         }
 
-        int modelRow = table.convertRowIndexToModel(selectedRow);
-        String oldCode = (String) tableModel.getValueAt(modelRow, 0);
+        Program selectedProgram = getSelectedProgramFromTable(selectedRow);
+        String oldCode = selectedProgram != null ? selectedProgram.getCode() : null;
 
         String code = codeField.getText().trim();
         String name = nameField.getText().trim();
@@ -291,12 +390,13 @@ public class ProgramPanel extends JPanel {
         String namePreview = (String) tableModel.getValueAt(modelRowPreview, 1);
 
         int confirm = JOptionPane.showConfirmDialog(this, 
-            "Are you sure you want to delete program " + codePreview + " (" + namePreview + ")?", 
-            "Confirm Delete", JOptionPane.YES_NO_OPTION);
+            "Are you sure you want to delete program " + codePreview + " (" + namePreview + ")?\n\n"
+            + "Warning: Students currently enrolled in this program will have their program set to NULL.",
+            "Confirm Delete", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
         
         if (confirm == JOptionPane.YES_OPTION) {
-            int modelRow = table.convertRowIndexToModel(selectedRow);
-            String code = (String) tableModel.getValueAt(modelRow, 0);
+            Program selectedProgram = getSelectedProgramFromTable(selectedRow);
+            String code = selectedProgram != null ? selectedProgram.getCode() : null;
             
             try {
                 if (dataManager.deleteProgram(code)) {
@@ -305,10 +405,11 @@ public class ProgramPanel extends JPanel {
                     refreshTable();
                     if (studentPanel != null) {
                         studentPanel.updateProgramCombo();
+                        studentPanel.refreshTable();
                     }
                 } else {
                     JOptionPane.showMessageDialog(this, 
-                        "Cannot delete program. Students are enrolled in this program.", 
+                        "Failed to delete program.", 
                         "Error", JOptionPane.ERROR_MESSAGE);
                     clearForm();
                 }
@@ -319,6 +420,18 @@ public class ProgramPanel extends JPanel {
                 clearForm();
             }
         }
+    }
+
+    private Program getSelectedProgramFromTable(int selectedRow) {
+        if (selectedRow == -1 || currentResults == null || currentResults.isEmpty()) {
+            return null;
+        }
+        int modelRow = table.convertRowIndexToModel(selectedRow);
+        int dataIndex = ((currentPage - 1) * pageSize) + modelRow;
+        if (dataIndex < 0 || dataIndex >= currentResults.size()) {
+            return null;
+        }
+        return currentResults.get(dataIndex);
     }
 
     private void clearForm() {

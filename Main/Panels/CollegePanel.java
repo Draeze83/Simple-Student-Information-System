@@ -17,6 +17,14 @@ public class CollegePanel extends JPanel {
     private JTextField searchField;
     private JTextField codeField, nameField;
     private ProgramPanel programPanel;
+    private List<College> currentResults;
+    private int currentPage = 1;
+    private int pageSize = 15;
+    private JLabel pageInfoLabel;
+    private JTextField pageField;
+    private JButton prevPageButton;
+    private JButton nextPageButton;
+    private JComboBox<Integer> pageSizeCombo;
 
     public CollegePanel(DataManager dataManager) {
         this.dataManager = dataManager;
@@ -59,7 +67,106 @@ public class CollegePanel extends JPanel {
 
         JScrollPane scrollPane = new JScrollPane(table);
         scrollPane.setPreferredSize(new Dimension(600, 300));
-        add(scrollPane, BorderLayout.CENTER);
+
+        JPanel tableContainer = new JPanel(new BorderLayout(5, 5));
+        tableContainer.add(scrollPane, BorderLayout.CENTER);
+        tableContainer.add(createNavigationPanel(), BorderLayout.SOUTH);
+
+        add(tableContainer, BorderLayout.CENTER);
+    }
+
+    private JPanel createNavigationPanel() {
+        JPanel navPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 5));
+
+        prevPageButton = new JButton("Prev");
+        prevPageButton.addActionListener(e -> {
+            if (currentPage > 1) {
+                currentPage--;
+                updateTablePage();
+            }
+        });
+
+        nextPageButton = new JButton("Next");
+        nextPageButton.addActionListener(e -> {
+            if (currentPage < getTotalPages()) {
+                currentPage++;
+                updateTablePage();
+            }
+        });
+
+        pageInfoLabel = new JLabel("Page 1 of 1");
+        pageField = new JTextField(3);
+        JButton goPageButton = new JButton("Go");
+        goPageButton.addActionListener(e -> goToPage());
+        pageField.addActionListener(e -> goToPage());
+
+        pageSizeCombo = new JComboBox<>(new Integer[]{10, 15, 20, 30, 50});
+        pageSizeCombo.setSelectedItem(pageSize);
+        pageSizeCombo.addActionListener(e -> {
+            pageSize = (Integer) pageSizeCombo.getSelectedItem();
+            currentPage = 1;
+            updateTablePage();
+        });
+
+        navPanel.add(new JLabel("Page Size:"));
+        navPanel.add(pageSizeCombo);
+        navPanel.add(prevPageButton);
+        navPanel.add(pageInfoLabel);
+        navPanel.add(nextPageButton);
+        navPanel.add(new JLabel("Go to page:"));
+        navPanel.add(pageField);
+        navPanel.add(goPageButton);
+
+        return navPanel;
+    }
+
+    private int getTotalPages() {
+        if (currentResults == null || currentResults.isEmpty()) {
+            return 1;
+        }
+        return Math.max(1, (int) Math.ceil((double) currentResults.size() / pageSize));
+    }
+
+    private void goToPage() {
+        try {
+            int requested = Integer.parseInt(pageField.getText().trim());
+            if (requested < 1 || requested > getTotalPages()) {
+                JOptionPane.showMessageDialog(this, "Page number must be between 1 and " + getTotalPages(), "Invalid Page", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            currentPage = requested;
+            updateTablePage();
+        } catch (NumberFormatException ex) {
+            JOptionPane.showMessageDialog(this, "Enter a valid page number.", "Invalid Page", JOptionPane.WARNING_MESSAGE);
+        }
+    }
+
+    private void setCurrentResults(List<College> results) {
+        currentResults = results != null ? results : new java.util.ArrayList<>();
+        currentPage = 1;
+        updateTablePage();
+    }
+
+    private void updateTablePage() {
+        tableModel.setRowCount(0);
+        int totalItems = currentResults.size();
+        int totalPages = getTotalPages();
+        if (currentPage > totalPages) {
+            currentPage = totalPages;
+        }
+        int startIndex = Math.max(0, (currentPage - 1) * pageSize);
+        int endIndex = Math.min(startIndex + pageSize, totalItems);
+        for (int i = startIndex; i < endIndex; i++) {
+            College college = currentResults.get(i);
+            tableModel.addRow(new Object[]{
+                college.getCode() != null ? college.getCode() : "NULL",
+                college.getName()
+            });
+        }
+        String rangeText = totalItems == 0 ? "0" : String.valueOf(startIndex + 1);
+        pageInfoLabel.setText(String.format("Page %d of %d (%s-%d of %d)", currentPage, totalPages, rangeText, endIndex, totalItems));
+        prevPageButton.setEnabled(currentPage > 1);
+        nextPageButton.setEnabled(currentPage < totalPages);
     }
 
     private void createSearchPanel() {
@@ -130,35 +237,21 @@ public class CollegePanel extends JPanel {
     }
 
     public void refreshTable() {
-        tableModel.setRowCount(0);
-        List<College> colleges = dataManager.getColleges();
-        for (College college : colleges) {
-            Object[] row = {
-                college.getCode(),
-                college.getName()
-            };
-            tableModel.addRow(row);
-        }
+        setCurrentResults(dataManager.getColleges());
     }
 
     private void performSearch() {
         String query = searchField.getText();
-        tableModel.setRowCount(0);
         List<College> results = dataManager.searchColleges(query);
-        for (College college : results) {
-            Object[] row = {
-                college.getCode(),
-                college.getName()
-            };
-            tableModel.addRow(row);
-        }
+        setCurrentResults(results);
     }
 
     private void loadSelectedCollege() {
         int selectedRow = table.getSelectedRow();
         if (selectedRow != -1) {
             int modelRow = table.convertRowIndexToModel(selectedRow);
-            codeField.setText((String) tableModel.getValueAt(modelRow, 0));
+            Object codeValue = tableModel.getValueAt(modelRow, 0);
+            codeField.setText(codeValue != null && !"NULL".equals(codeValue) ? (String) codeValue : "");
             nameField.setText((String) tableModel.getValueAt(modelRow, 1));
         }
     }
@@ -204,8 +297,9 @@ public class CollegePanel extends JPanel {
             return;
         }
 
-        int modelRow = table.convertRowIndexToModel(selectedRow);
-        String oldCode = (String) tableModel.getValueAt(modelRow, 0);
+        College selectedCollege = getSelectedCollegeFromTable(selectedRow);
+        String oldCode = selectedCollege != null ? selectedCollege.getCode() : null;
+        String oldName = selectedCollege != null ? selectedCollege.getName() : null;
 
         String code = codeField.getText().trim();
         String name = nameField.getText().trim();
@@ -217,7 +311,7 @@ public class CollegePanel extends JPanel {
 
         try {
             College college = new College(code, name);
-            if (dataManager.updateCollege(oldCode, college)) {
+            if (dataManager.updateCollege(oldCode, oldName, college)) {
                 JOptionPane.showMessageDialog(this, "College updated successfully!");
                 clearForm();
                 refreshTable();
@@ -253,12 +347,14 @@ public class CollegePanel extends JPanel {
         String namePreview = (String) tableModel.getValueAt(modelRowPreview, 1);
 
         int confirm = JOptionPane.showConfirmDialog(this, 
-            "Are you sure you want to delete college " + codePreview + " (" + namePreview + ")?", 
-            "Confirm Delete", JOptionPane.YES_NO_OPTION);
+            "Are you sure you want to delete college " + codePreview + " (" + namePreview + ")?\n\n"
+            + "Warning: Any programs associated with this college will have their college set to NULL.\n"
+            + "Students enrolled in those programs will also have their program set to NULL.",
+            "Confirm Delete", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
         
         if (confirm == JOptionPane.YES_OPTION) {
-            int modelRow = table.convertRowIndexToModel(selectedRow);
-            String code = (String) tableModel.getValueAt(modelRow, 0);
+            College selectedCollege = getSelectedCollegeFromTable(selectedRow);
+            String code = selectedCollege != null ? selectedCollege.getCode() : null;
             
             try {
                 if (dataManager.deleteCollege(code)) {
@@ -267,10 +363,11 @@ public class CollegePanel extends JPanel {
                     refreshTable();
                     if (programPanel != null) {
                         programPanel.updateCollegeCombo();
+                        programPanel.refreshTable();
                     }
                 } else {
                     JOptionPane.showMessageDialog(this, 
-                        "Cannot delete college. Programs are associated with this college.", 
+                        "Failed to delete college.", 
                         "Error", JOptionPane.ERROR_MESSAGE);
                     clearForm();
                 }
@@ -281,6 +378,18 @@ public class CollegePanel extends JPanel {
                 clearForm();
             }
         }
+    }
+
+    private College getSelectedCollegeFromTable(int selectedRow) {
+        if (selectedRow == -1 || currentResults == null || currentResults.isEmpty()) {
+            return null;
+        }
+        int modelRow = table.convertRowIndexToModel(selectedRow);
+        int dataIndex = ((currentPage - 1) * pageSize) + modelRow;
+        if (dataIndex < 0 || dataIndex >= currentResults.size()) {
+            return null;
+        }
+        return currentResults.get(dataIndex);
     }
 
     private void clearForm() {

@@ -22,19 +22,46 @@ public class Program {
     public String toCSV() {
         return escapeCSV(code) + "," + 
         escapeCSV(name) + "," + 
-        escapeCSV(college);
+        encodeCollege(college);
+    }
+
+    // Encodes a null or blank college code as the literal "NULL" in the CSV
+    private static String encodeCollege(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return "NULL";
+        }
+        return escapeCSV(value);
     }
 
     public static Program fromCSV(String csvLine) {
-        String[] parts = csvLine.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)"); // Handle commas in quotes
+        // Handle commas in quotes; keep trailing empty fields
+        String[] parts = csvLine.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)", -1);
         if (parts.length >= 3) {
+            String college = unescapeCSV(parts[2]);
+            // Treat the literal token "NULL" as a null college code
+            if (college != null && college.equalsIgnoreCase("NULL")) {
+                college = null;
+            }
             return new Program(
-                parts[0].trim(), 
-                parts[1].trim(), 
-                parts[2].trim()
+                unescapeCSV(parts[0]),
+                unescapeCSV(parts[1]),
+                college
             );
         }
         return null;
+    }
+
+    // Reverses escapeCSV: strips surrounding quotes, collapses doubled quotes,
+    // and removes the leading apostrophe added as an injection guard.
+    private static String unescapeCSV(String value) {
+        if (value == null) return null;
+        String v = value.trim();
+        if (v.length() >= 2 && v.startsWith("\"") && v.endsWith("\"")) {
+            v = v.substring(1, v.length() - 1).replace("\"\"", "\"");
+        } else if (v.startsWith("'=") || v.startsWith("'+")) {
+            v = v.substring(1);
+        }
+        return v;
     }
 
     // CSV injection prevention

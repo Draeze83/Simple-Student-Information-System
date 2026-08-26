@@ -17,6 +17,14 @@ public class StudentPanel extends JPanel {
     private JTextField searchField;
     private JTextField idField, firstNameField, lastNameField;
     private JComboBox<String> programCombo, genderCombo, yearCombo;
+    private List<Student> currentResults;
+    private int currentPage = 1;
+    private int pageSize = 15;
+    private JLabel pageInfoLabel;
+    private JTextField pageField;
+    private JButton prevPageButton;
+    private JButton nextPageButton;
+    private JComboBox<Integer> pageSizeCombo;
 
     public StudentPanel(DataManager dataManager) {
         this.dataManager = dataManager;
@@ -55,7 +63,113 @@ public class StudentPanel extends JPanel {
 
         JScrollPane scrollPane = new JScrollPane(table);
         scrollPane.setPreferredSize(new Dimension(600, 300));
-        add(scrollPane, BorderLayout.CENTER);
+
+        JPanel tableContainer = new JPanel(new BorderLayout(5, 5));
+        tableContainer.add(scrollPane, BorderLayout.CENTER);
+        tableContainer.add(createNavigationPanel(), BorderLayout.SOUTH);
+
+        add(tableContainer, BorderLayout.CENTER);
+    }
+
+    private JPanel createNavigationPanel() {
+        JPanel navPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 5));
+
+        prevPageButton = new JButton("Prev");
+        prevPageButton.addActionListener(e -> {
+            if (currentPage > 1) {
+                currentPage--;
+                updateTablePage();
+            }
+        });
+
+        nextPageButton = new JButton("Next");
+        nextPageButton.addActionListener(e -> {
+            if (currentPage < getTotalPages()) {
+                currentPage++;
+                updateTablePage();
+            }
+        });
+
+        pageInfoLabel = new JLabel("Page 1 of 1");
+        pageField = new JTextField(3);
+        JButton goPageButton = new JButton("Go");
+        goPageButton.addActionListener(e -> goToPage());
+        pageField.addActionListener(e -> goToPage());
+
+        pageSizeCombo = new JComboBox<>(new Integer[]{10, 15, 20, 30, 50});
+        pageSizeCombo.setSelectedItem(pageSize);
+        pageSizeCombo.addActionListener(e -> {
+            pageSize = (Integer) pageSizeCombo.getSelectedItem();
+            currentPage = 1;
+            updateTablePage();
+        });
+
+        navPanel.add(new JLabel("Page Size:"));
+        navPanel.add(pageSizeCombo);
+        navPanel.add(prevPageButton);
+        navPanel.add(pageInfoLabel);
+        navPanel.add(nextPageButton);
+        navPanel.add(new JLabel("Go to page:"));
+        navPanel.add(pageField);
+        navPanel.add(goPageButton);
+
+        return navPanel;
+    }
+
+    private int getTotalPages() {
+        if (currentResults == null || currentResults.isEmpty()) {
+            return 1;
+        }
+        return Math.max(1, (int) Math.ceil((double) currentResults.size() / pageSize));
+    }
+
+    private void goToPage() {
+        try {
+            int requested = Integer.parseInt(pageField.getText().trim());
+            if (requested < 1 || requested > getTotalPages()) {
+                JOptionPane.showMessageDialog(this, "Page number must be between 1 and " + getTotalPages(), "Invalid Page", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            currentPage = requested;
+            updateTablePage();
+        } catch (NumberFormatException ex) {
+            JOptionPane.showMessageDialog(this, "Enter a valid page number.", "Invalid Page", JOptionPane.WARNING_MESSAGE);
+        }
+    }
+
+    private void setCurrentResults(List<Student> results) {
+        currentResults = results != null ? results : new java.util.ArrayList<>();
+        currentPage = 1;
+        updateTablePage();
+    }
+
+    private void updateTablePage() {
+        tableModel.setRowCount(0);
+        int totalItems = currentResults.size();
+        int totalPages = getTotalPages();
+        if (currentPage > totalPages) {
+            currentPage = totalPages;
+        }
+        int startIndex = Math.max(0, (currentPage - 1) * pageSize);
+        int endIndex = Math.min(startIndex + pageSize, totalItems);
+
+        for (int i = startIndex; i < endIndex; i++) {
+            Student student = currentResults.get(i);
+            String programCodeDisplay = student.getProgramCode() != null ? student.getProgramCode() : "NULL";
+            tableModel.addRow(new Object[]{
+                student.getId(),
+                student.getFirstName(),
+                student.getLastName(),
+                programCodeDisplay,
+                student.getYear(),
+                student.getGender()
+            });
+        }
+
+        String rangeText = totalItems == 0 ? "0" : String.valueOf(startIndex + 1);
+        pageInfoLabel.setText(String.format("Page %d of %d (%s-%d of %d)", currentPage, totalPages, rangeText, endIndex, totalItems));
+        prevPageButton.setEnabled(currentPage > 1);
+        nextPageButton.setEnabled(currentPage < totalPages);
     }
 
     private void createSearchPanel() {
@@ -161,36 +275,13 @@ public class StudentPanel extends JPanel {
     }
 
     public void refreshTable() {
-        tableModel.setRowCount(0);
-        List<Student> students = dataManager.getStudents();
-        for (Student student : students) {
-            Object[] row = {
-                student.getId(),
-                student.getFirstName(),
-                student.getLastName(),
-                student.getProgramCode(),
-                student.getYear(),
-                student.getGender()
-            };
-            tableModel.addRow(row);
-        }
+        setCurrentResults(dataManager.getStudents());
     }
 
     private void performSearch() {
         String query = searchField.getText();
-        tableModel.setRowCount(0);
         List<Student> results = dataManager.searchStudents(query);
-        for (Student student : results) {
-            Object[] row = {
-                student.getId(),
-                student.getFirstName(),
-                student.getLastName(),
-                student.getProgramCode(),
-                student.getYear(),
-                student.getGender()
-            };
-            tableModel.addRow(row);
-        }
+        setCurrentResults(results);
     }
 
     private void loadSelectedStudent() {
@@ -200,7 +291,14 @@ public class StudentPanel extends JPanel {
             idField.setText((String) tableModel.getValueAt(modelRow, 0));
             firstNameField.setText((String) tableModel.getValueAt(modelRow, 1));
             lastNameField.setText((String) tableModel.getValueAt(modelRow, 2));
-            programCombo.setSelectedItem((String) tableModel.getValueAt(modelRow, 3));
+            String programValue = (String) tableModel.getValueAt(modelRow, 3);
+            if (programValue == null || "NULL".equals(programValue)) {
+                // No program (or a code not in the list): clear the selection so a
+                // stale combo value can't be silently written back on update.
+                programCombo.setSelectedItem(null);
+            } else {
+                programCombo.setSelectedItem(programValue);
+            }
             yearCombo.setSelectedItem((String) tableModel.getValueAt(modelRow, 4));
             genderCombo.setSelectedItem((String) tableModel.getValueAt(modelRow, 5));
         }

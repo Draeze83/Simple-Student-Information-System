@@ -16,6 +16,8 @@ public class DataManager {
     private ValidationResult lastValidationResult = ValidationResult.ok();
     // Backwards‑compatible message representation for callers that still use strings
     private String lastValidationError = "";
+    // Warnings from the most recent loadData() call (e.g. skipped malformed rows)
+    private List<String> lastLoadWarnings = new ArrayList<>();
     
     public DataManager(CSVManager csvManager) {
         this.csvManager = csvManager;
@@ -23,24 +25,38 @@ public class DataManager {
     }
 
     public void loadData() {
+        List<String> warnings = new ArrayList<>();
         colleges = csvManager.loadColleges();
+        warnings.addAll(csvManager.getLastLoadWarnings());
         programs = csvManager.loadPrograms();
+        warnings.addAll(csvManager.getLastLoadWarnings());
         students = csvManager.loadStudents();
+        warnings.addAll(csvManager.getLastLoadWarnings());
+        lastLoadWarnings = warnings;
 
         enforceIntegrityAndUniqueness();
     }
 
+    public List<String> getLastLoadWarnings() {
+        return new ArrayList<>(lastLoadWarnings);
+    }
+
     // Basic integrity checks and duplicate detection after loading from CSV
     private void enforceIntegrityAndUniqueness() {
-        // Allow duplicate college codes; just filter out null entries
-        List<College> validColleges = new ArrayList<>();
+        // Deduplicate colleges by normalized code (keep first)
+        Map<String, College> uniqueColleges = new LinkedHashMap<>();
         for (College c : colleges) {
             if (c == null || c.getCode() == null) {
                 continue;
             }
-            validColleges.add(c);
+            String normalizedCode = normalizeComparisonKey(c.getCode());
+            if (uniqueColleges.containsKey(normalizedCode)) {
+                System.err.println("Duplicate college code detected in CSV, keeping first: " + c.getCode());
+            } else {
+                uniqueColleges.put(normalizedCode, c);
+            }
         }
-        colleges = validColleges;
+        colleges = new ArrayList<>(uniqueColleges.values());
 
         // Deduplicate programs by code (keep first)
         Map<String, Program> uniquePrograms = new LinkedHashMap<>();
@@ -68,7 +84,7 @@ public class DataManager {
         }
         students = new ArrayList<>(uniqueStudents.values());
 
-        // Referential checks: program.college must exist
+        // Referential checks: program.college must exist (null is allowed)
         Set<String> collegeCodes = colleges.stream()
             .filter(c -> c.getCode() != null)
             .map(College::getCode)
@@ -80,7 +96,7 @@ public class DataManager {
             }
         }
 
-        // Referential checks: student.programCode must exist
+        // Referential checks: student.programCode must exist (null is allowed)
         Set<String> programCodes = programs.stream()
             .filter(p -> p.getCode() != null)
             .map(Program::getCode)
@@ -168,23 +184,56 @@ public class DataManager {
     public boolean addProgram(Program program) {
         lastValidationResult = ValidationResult.ok();
         lastValidationError = "";
+        normalizeProgramForPersistence(program);
         if (validateProgram(program, null)) {
             programs.add(program);
-            csvManager.savePrograms(programs);
-            return true;
+            try {
+                csvManager.savePrograms(programs);
+                return true;
+            } catch (IOException e) {
+                programs.remove(program);
+                throw new RuntimeException("Failed to save program: " + e.getMessage(), e);
+            }
         }
         return false;
     }
 
     public boolean updateProgram(String oldCode, Program newProgram) {
         for (int i = 0; i < programs.size(); i++) {
-            if (programs.get(i).getCode().equals(oldCode)) {
+            if (Objects.equals(programs.get(i).getCode(), oldCode)) {
                 lastValidationResult = ValidationResult.ok();
                 lastValidationError = "";
+                normalizeProgramForPersistence(newProgram);
                 if (validateProgram(newProgram, oldCode)) {
+                    Program oldProgram = programs.get(i);
+                    List<Student> affectedStudents = new ArrayList<>();
+                    for (Student s : students) {
+                        if (Objects.equals(oldCode, s.getProgramCode())) {
+                            affectedStudents.add(s);
+                            s.setProgramCode(newProgram.getCode());
+                        }
+                    }
+
                     programs.set(i, newProgram);
-                    csvManager.savePrograms(programs);
-                    return true;
+                    try {
+                        csvManager.savePrograms(programs);
+                        csvManager.saveStudents(students);
+                        return true;
+                    } catch (IOException e) {
+                        // Restore in-memory state, then re-sync disk so a partial
+                        // write (one file saved, the other failed) can't persist.
+                        programs.set(i, oldProgram);
+                        for (Student s : affectedStudents) {
+                            s.setProgramCode(oldCode);
+                        }
+                        try {
+                            csvManager.savePrograms(programs);
+                            csvManager.saveStudents(students);
+                        } catch (IOException ignored) {
+                            // best-effort resync; original failure is reported below
+                        }
+                        throw new RuntimeException("Failed to update program: " + e.getMessage(), e);
+                    }
                 }
             }
         }
@@ -192,18 +241,54 @@ public class DataManager {
     }
 
     public boolean deleteProgram(String code) {
-        boolean hasStudents = students.stream()
-            .anyMatch(s -> s.getProgramCode().equals(code));
-        
-        if (hasStudents) {
-            return false;
+        // Null out program code for all students enrolled in this program
+        List<Student> affectedStudents = new ArrayList<>();
+        for (Student s : students) {
+            if (code.equals(s.getProgramCode())) {
+                affectedStudents.add(s);
+                s.setProgramCode(null);
+            }
+        }
+        if (!affectedStudents.isEmpty()) {
+            try {
+                csvManager.saveStudents(students);
+            } catch (IOException e) {
+                for (Student s : affectedStudents) {
+                    s.setProgramCode(code);
+                }
+                throw new RuntimeException("Failed to update students after program deletion: " + e.getMessage(), e);
+            }
         }
 
-        boolean removed = programs.removeIf(p -> p.getCode().equals(code));
-        if (removed) {
-            csvManager.savePrograms(programs);
+        int removedIndex = -1;
+        Program removedProgram = null;
+        for (int i = 0; i < programs.size(); i++) {
+            if (Objects.equals(programs.get(i).getCode(), code)) {
+                removedIndex = i;
+                removedProgram = programs.get(i);
+                break;
+            }
         }
-        return removed;
+        if (removedProgram != null) {
+            programs.remove(removedIndex);
+            try {
+                csvManager.savePrograms(programs);
+            } catch (IOException e) {
+                // Roll back the removal and the student un-enrollments, then re-sync disk.
+                programs.add(removedIndex, removedProgram);
+                for (Student s : affectedStudents) {
+                    s.setProgramCode(code);
+                }
+                try {
+                    csvManager.saveStudents(students);
+                } catch (IOException ignored) {
+                    // best-effort resync; original failure is reported below
+                }
+                throw new RuntimeException("Failed to delete program: " + e.getMessage(), e);
+            }
+            return true;
+        }
+        return false;
     }
 
     // College CRUD
@@ -214,23 +299,57 @@ public class DataManager {
     public boolean addCollege(College college) {
         lastValidationResult = ValidationResult.ok();
         lastValidationError = "";
+        normalizeCollegeForPersistence(college);
         if (validateCollege(college, null)) {
             colleges.add(college);
-            csvManager.saveColleges(colleges);
-            return true;
+            try {
+                csvManager.saveColleges(colleges);
+                return true;
+            } catch (IOException e) {
+                colleges.remove(college);
+                throw new RuntimeException("Failed to save college: " + e.getMessage(), e);
+            }
         }
         return false;
     }
 
-    public boolean updateCollege(String oldCode, College newCollege) {
+    public boolean updateCollege(String oldCode, String oldName, College newCollege) {
         for (int i = 0; i < colleges.size(); i++) {
-            if (colleges.get(i).getCode().equals(oldCode)) {
+            if (Objects.equals(colleges.get(i).getCode(), oldCode)) {
                 lastValidationResult = ValidationResult.ok();
                 lastValidationError = "";
-                if (validateCollege(newCollege, oldCode)) {
+                normalizeCollegeForPersistence(newCollege);
+                if (validateCollege(newCollege, oldCode, oldName)) {
+                    College oldCollege = colleges.get(i);
                     colleges.set(i, newCollege);
-                    csvManager.saveColleges(colleges);
-                    return true;
+
+                    List<Program> affectedPrograms = new ArrayList<>();
+                    for (Program p : programs) {
+                        if (Objects.equals(oldCode, p.getCollege())) {
+                            affectedPrograms.add(p);
+                            p.setCollege(newCollege.getCode());
+                        }
+                    }
+
+                    try {
+                        csvManager.saveColleges(colleges);
+                        csvManager.savePrograms(programs);
+                        return true;
+                    } catch (IOException e) {
+                        // Restore in-memory state, then re-sync disk so a partial
+                        // write (one file saved, the other failed) can't persist.
+                        colleges.set(i, oldCollege);
+                        for (Program p : affectedPrograms) {
+                            p.setCollege(oldCode);
+                        }
+                        try {
+                            csvManager.saveColleges(colleges);
+                            csvManager.savePrograms(programs);
+                        } catch (IOException ignored) {
+                            // best-effort resync; original failure is reported below
+                        }
+                        throw new RuntimeException("Failed to update college: " + e.getMessage(), e);
+                    }
                 }
             }
         }
@@ -238,18 +357,119 @@ public class DataManager {
     }
 
     public boolean deleteCollege(String code) {
-        boolean hasPrograms = programs.stream()
-            .anyMatch(p -> p.getCollege().equals(code));
-        
-        if (hasPrograms) {
-            return false;
+        // Find all programs belonging to this college and null out their college reference.
+        // Also cascade: any students enrolled in those programs get their program code nulled.
+        List<Program> affectedPrograms = new ArrayList<>();
+        List<String> affectedProgramCodes = new ArrayList<>();
+        for (Program p : programs) {
+            if (Objects.equals(code, p.getCollege())) {
+                affectedPrograms.add(p);
+                affectedProgramCodes.add(p.getCode());
+                p.setCollege(null);
+            }
         }
 
-        boolean removed = colleges.removeIf(c -> c.getCode().equals(code));
-        if (removed) {
-            csvManager.saveColleges(colleges);
+        // Track affected students and their old program codes for rollback.
+        List<Student> affectedStudents = new ArrayList<>();
+        List<String> affectedStudentOldCodes = new ArrayList<>();
+
+        if (!affectedPrograms.isEmpty()) {
+            try {
+                csvManager.savePrograms(programs);
+            } catch (IOException e) {
+                for (Program p : affectedPrograms) {
+                    p.setCollege(code);
+                }
+                throw new RuntimeException("Failed to update programs after college deletion: " + e.getMessage(), e);
+            }
+
+            // Cascade: students enrolled in any affected program lose their program code
+            for (Student s : students) {
+                if (s.getProgramCode() != null && affectedProgramCodes.contains(s.getProgramCode())) {
+                    affectedStudents.add(s);
+                    affectedStudentOldCodes.add(s.getProgramCode());
+                    s.setProgramCode(null);
+                }
+            }
+            if (!affectedStudents.isEmpty()) {
+                try {
+                    csvManager.saveStudents(students);
+                } catch (IOException e) {
+                    // Roll back students and programs, then re-sync the program file.
+                    for (int k = 0; k < affectedStudents.size(); k++) {
+                        affectedStudents.get(k).setProgramCode(affectedStudentOldCodes.get(k));
+                    }
+                    for (Program p : affectedPrograms) {
+                        p.setCollege(code);
+                    }
+                    try {
+                        csvManager.savePrograms(programs);
+                    } catch (IOException ignored) {
+                        // best-effort resync; original failure is reported below
+                    }
+                    throw new RuntimeException("Failed to update students after college deletion: " + e.getMessage(), e);
+                }
+            }
         }
-        return removed;
+
+        int removedIndex = -1;
+        College removedCollege = null;
+        for (int i = 0; i < colleges.size(); i++) {
+            if (Objects.equals(colleges.get(i).getCode(), code)) {
+                removedIndex = i;
+                removedCollege = colleges.get(i);
+                break;
+            }
+        }
+        if (removedCollege != null) {
+            colleges.remove(removedIndex);
+            try {
+                csvManager.saveColleges(colleges);
+            } catch (IOException e) {
+                // Roll back the whole cascade, then re-sync the other two files.
+                colleges.add(removedIndex, removedCollege);
+                for (int k = 0; k < affectedStudents.size(); k++) {
+                    affectedStudents.get(k).setProgramCode(affectedStudentOldCodes.get(k));
+                }
+                for (Program p : affectedPrograms) {
+                    p.setCollege(code);
+                }
+                try {
+                    csvManager.savePrograms(programs);
+                    csvManager.saveStudents(students);
+                } catch (IOException ignored) {
+                    // best-effort resync; original failure is reported below
+                }
+                throw new RuntimeException("Failed to delete college: " + e.getMessage(), e);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private String normalizeTextValue(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private void normalizeProgramForPersistence(Program program) {
+        if (program == null) {
+            return;
+        }
+        program.setCode(normalizeTextValue(program.getCode()));
+        program.setName(normalizeTextValue(program.getName()));
+        program.setCollege(normalizeTextValue(program.getCollege()));
+    }
+
+    private void normalizeCollegeForPersistence(College college) {
+        if (college == null) {
+            return;
+        }
+        college.setCode(normalizeTextValue(college.getCode()));
+        college.setName(normalizeTextValue(college.getName()));
     }
 
     // ------------ ValidationResult helper type ------------
@@ -328,7 +548,11 @@ public class DataManager {
     }
 
     private boolean validateCollege(College college, String oldCode) {
-        ValidationResult result = validateCollegeDetailed(college, oldCode);
+        return validateCollege(college, oldCode, null);
+    }
+
+    private boolean validateCollege(College college, String oldCode, String oldName) {
+        ValidationResult result = validateCollegeDetailed(college, oldCode, oldName);
         lastValidationResult = result;
         lastValidationError = result.toMessage();
         return result.isOk();
@@ -401,15 +625,11 @@ public class DataManager {
             }
         }
 
-        // Validate year is integer between 1-6
+        // Validate year is a single ASCII digit between 1-6 (rejects "+3", " 3",
+        // "00", leading zeros, and non-ASCII digits that Integer.parseInt accepts).
         if (student.getYear() != null && !student.getYear().trim().isEmpty()) {
-            try {
-                int yearNum = Integer.parseInt(student.getYear());
-                if (yearNum < 1 || yearNum > 6) {
-                    result.addFieldError("year", "Year: must be a number between 1 and 6.");
-                }
-            } catch (NumberFormatException e) {
-                result.addFieldError("year", "Year: must be a valid number.");
+            if (!student.getYear().matches("[1-6]")) {
+                result.addFieldError("year", "Year: must be a number between 1 and 6.");
             }
         }
 
@@ -425,7 +645,7 @@ public class DataManager {
         // Check if program exists
         if (student.getProgramCode() != null && !student.getProgramCode().trim().isEmpty()) {
             boolean programExists = programs.stream()
-                .anyMatch(p -> p.getCode().equals(student.getProgramCode()));
+                .anyMatch(p -> Objects.equals(p.getCode(), student.getProgramCode()));
             if (!programExists) {
                 result.addFieldError("programCode", "Program code: must refer to an existing program.");
             }
@@ -443,31 +663,34 @@ public class DataManager {
         }
         
         // Length validation
-        if (program.getCode() == null || program.getCode().length() > 20) {
-            result.addFieldError("code", "Program Code: must not be empty and must be at most 20 characters.");
+        if (program.getCode() != null && program.getCode().length() > 20) {
+            result.addFieldError("code", "Program Code: must be at most 20 characters.");
         }
         if (program.getName() == null || program.getName().length() > 100) {
             result.addFieldError("name", "Program Name: must not be empty and must be at most 100 characters.");
         }
-        if (program.getCollege() == null || program.getCollege().length() > 20) {
-            result.addFieldError("college", "College Code: must not be empty and must be at most 20 characters.");
+        if (program.getCollege() != null && program.getCollege().length() > 20) {
+            result.addFieldError("college", "College Code: must be at most 20 characters.");
         }
         
         // Check if empty
-        if (program.getCode() != null && program.getCode().trim().isEmpty()) {
-            result.addFieldError("code", "Program Code: must not be empty.");
-        }
         if (program.getName() != null && program.getName().trim().isEmpty()) {
             result.addFieldError("name", "Program Name: must not be empty.");
-        }
-        if (program.getCollege() != null && program.getCollege().trim().isEmpty()) {
-            result.addFieldError("college", "College Code: must not be empty.");
         }
         
         // Validate code format: all letters capitalized, no numbers
         if (program.getCode() != null && !program.getCode().trim().isEmpty()
                 && !program.getCode().matches("^[A-Z]{2,20}$")) {
             result.addFieldError("code", "Program Code: all alphabetical characters must be capitalized and must not contain any numbers.");
+        }
+
+        // "NULL" is the CSV sentinel for an absent code; reject it as a real code.
+        if (program.getCode() != null && program.getCode().equalsIgnoreCase("NULL")) {
+            result.addFieldError("code", "Program Code: \"NULL\" is a reserved value and cannot be used as a code.");
+        }
+
+        if (program.getCode() != null && program.getCode().trim().isEmpty()) {
+            program.setCode(null);
         }
         
         // Validate name (letters, spaces, hyphens, apostrophes, parentheses only)
@@ -477,9 +700,9 @@ public class DataManager {
         }
         
         // Check for duplicate code (unless updating same program)
-        if (program.getCode() != null && (oldCode == null || !oldCode.equals(program.getCode()))) {
+        if (program.getCode() != null && (oldCode == null || !Objects.equals(oldCode, program.getCode()))) {
             boolean codeExists = programs.stream()
-                .anyMatch(p -> p.getCode().equals(program.getCode()));
+                .anyMatch(p -> Objects.equals(p.getCode(), program.getCode()));
             if (codeExists) {
                 result.addFieldError("code", "Program Code: must be unique.");
             }
@@ -488,7 +711,7 @@ public class DataManager {
         // Check if college exists
         if (program.getCollege() != null && !program.getCollege().trim().isEmpty()) {
             boolean collegeExists = colleges.stream()
-                .anyMatch(c -> c.getCode().equals(program.getCollege()));
+                .anyMatch(c -> Objects.equals(c.getCode(), program.getCollege()));
             if (!collegeExists) {
                 result.addFieldError("college", "College Code: must refer to an existing college.");
             }
@@ -497,7 +720,7 @@ public class DataManager {
         return result;
     }
 
-    private ValidationResult validateCollegeDetailed(College college, String oldCode) {
+    private ValidationResult validateCollegeDetailed(College college, String oldCode, String oldName) {
         ValidationResult result = ValidationResult.ok();
 
         if (college == null) {
@@ -506,17 +729,14 @@ public class DataManager {
         }
         
         // Length validation
-        if (college.getCode() == null || college.getCode().length() > 20) {
-            result.addFieldError("code", "College Code: must not be empty and must be at most 20 characters.");
+        if (college.getCode() != null && college.getCode().length() > 20) {
+            result.addFieldError("code", "College Code: must be at most 20 characters.");
         }
         if (college.getName() == null || college.getName().length() > 100) {
             result.addFieldError("name", "College Name: must not be empty and must be at most 100 characters.");
         }
         
         // Check empty
-        if (college.getCode() != null && college.getCode().trim().isEmpty()) {
-            result.addFieldError("code", "College Code: must not be empty.");
-        }
         if (college.getName() != null && college.getName().trim().isEmpty()) {
             result.addFieldError("name", "College Name: must not be empty.");
         }
@@ -526,14 +746,78 @@ public class DataManager {
                 && !college.getCode().matches("^[A-Z]{2,20}$")) {
             result.addFieldError("code", "College Code: must be capitalized and must not contain any numbers.");
         }
+
+        // "NULL" is the CSV sentinel for an absent code; reject it as a real code.
+        if (college.getCode() != null && college.getCode().equalsIgnoreCase("NULL")) {
+            result.addFieldError("code", "College Code: \"NULL\" is a reserved value and cannot be used as a code.");
+        }
+
+        if (college.getCode() != null && college.getCode().trim().isEmpty()) {
+            college.setCode(null);
+        }
         
         // Validate name (letters, spaces, hyphens, apostrophes, parentheses only; no numbers)
         if (college.getName() != null && !college.getName().trim().isEmpty()
                 && !college.getName().matches("^[a-zA-Z\\s'\\-()]+$")) {
             result.addFieldError("name", "College Name: must not contain any numbers and may only contain letters, spaces, hyphens, apostrophes, and parentheses.");
         }
-        
+
+        // Check for duplicate college code (unless updating same college)
+        String normalizedNewCode = normalizeComparisonKey(college.getCode());
+        String normalizedOldCode = oldCode == null ? null : normalizeComparisonKey(oldCode);
+        if (normalizedNewCode != null && (oldCode == null || !normalizedNewCode.equals(normalizedOldCode))) {
+            boolean codeExists = colleges.stream()
+                .anyMatch(c -> normalizedNewCode.equals(normalizeComparisonKey(c.getCode()))
+                    && (oldCode == null || !normalizeComparisonKey(c.getCode()).equals(normalizedOldCode)));
+            if (codeExists) {
+                result.addFieldError("code", "College Code: must be unique. Whitespace and punctuation differences are ignored.");
+            }
+        }
+
+        String normalizedNewName = normalizeComparisonKey(college.getName());
+
+        // Find the original college record for proper self-exclusion
+        String normalizedOldName = oldName == null ? null : normalizeComparisonKey(oldName);
+        final String lookupOldCode = normalizedOldCode;
+        final String lookupOldName = normalizedOldName;
+        final College originalCollege;
+        if (lookupOldCode != null) {
+            originalCollege = colleges.stream()
+                .filter(c -> Objects.equals(normalizeComparisonKey(c.getCode()), lookupOldCode))
+                .findFirst()
+                .orElse(null);
+        } else if (lookupOldName != null) {
+            originalCollege = colleges.stream()
+                .filter(c -> Objects.equals(normalizeComparisonKey(c.getName()), lookupOldName)
+                    && normalizeComparisonKey(c.getCode()) == null)
+                .findFirst()
+                .orElse(null);
+        } else {
+            originalCollege = null;
+        }
+
+        String effectiveOldName = normalizedOldName;
+        if (effectiveOldName == null && originalCollege != null) {
+            effectiveOldName = normalizeComparisonKey(originalCollege.getName());
+        }
+
+        if (normalizedNewName != null && (normalizedOldName == null || !normalizedNewName.equals(normalizedOldName))) {
+            boolean nameExists = colleges.stream()
+                .anyMatch(c -> normalizedNewName.equals(normalizeComparisonKey(c.getName()))
+                    && c != originalCollege);
+            if (nameExists) {
+                result.addFieldError("name", "College Name: must be unique. Whitespace and punctuation differences are ignored.");
+            }
+        }
+
         return result;
+    }
+
+    private String normalizeComparisonKey(String value) {
+        if (value == null) {
+            return null;
+        }
+        return value.trim().replaceAll("[\\p{Punct}\\s]+", " ").toLowerCase();
     }
 
     // Search functionality
@@ -548,13 +832,17 @@ public class DataManager {
         if (sanitizedQuery.length() > 100) {
             sanitizedQuery = sanitizedQuery.substring(0, 100);
         }
-        
-        String lowerQuery = query.toLowerCase();
+        if (sanitizedQuery.trim().isEmpty()) {
+            return getStudents();
+        }
+
+        String lowerQuery = sanitizedQuery.toLowerCase();
         return students.stream()
             .filter(s -> s.getId().toLowerCase().contains(lowerQuery)
                 || s.getFirstName().toLowerCase().contains(lowerQuery)
                 || s.getLastName().toLowerCase().contains(lowerQuery)
-                || s.getProgramCode().toLowerCase().contains(lowerQuery)
+                || (s.getProgramCode() != null && s.getProgramCode().toLowerCase().contains(lowerQuery))
+                || (s.getProgramCode() == null && "null".equals(lowerQuery))
                 || s.getYear().toLowerCase().contains(lowerQuery)
                 || s.getGender().toLowerCase().contains(lowerQuery))
             .collect(Collectors.toList());
@@ -574,7 +862,7 @@ public class DataManager {
         return programs.stream()
             .filter(p -> p.getCode().toLowerCase().contains(lowerQuery)
                 || p.getName().toLowerCase().contains(lowerQuery)
-                || p.getCollege().toLowerCase().contains(lowerQuery))
+                || (p.getCollege() != null && p.getCollege().toLowerCase().contains(lowerQuery)))
             .collect(Collectors.toList());
     }
 
